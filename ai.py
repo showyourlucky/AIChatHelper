@@ -200,24 +200,34 @@ def has_active_session(cursor):
 # 检查文件是否存在并是否可执行
 def check_executable(cmd_path):
     """检查文件是否存在并是否可执行"""
-    cmd_file = Path(cmd_path)
-    
-    # 如果是绝对路径且文件存在
-    if cmd_file.exists():
-        # 在 Linux/Mac 上检查可执行权限
-        if sys.platform != 'win32':
-            return os.access(cmd_file, os.X_OK)
-        return True
-    
-    # 搜索 PATH 环境变量
-    for path_dir in os.environ.get('PATH', '').split(os.pathsep):
-        exe_file = Path(path_dir) / cmd_path
-        if exe_file.exists():
+    try:
+        cmd_file = Path(cmd_path)
+        
+        # 如果是绝对路径且文件存在
+        if cmd_file.exists():
+            # 在 Linux/Mac 上检查可执行权限
             if sys.platform != 'win32':
-                return os.access(exe_file, os.X_OK)
+                is_executable = os.access(cmd_file, os.X_OK)
+                if not is_executable:
+                    print(f"文件存在但不可执行: {cmd_path}")
+                return is_executable
             return True
-    
-    return False
+        
+        # 搜索 PATH 环境变量
+        for path_dir in os.environ.get('PATH', '').split(os.pathsep):
+            exe_file = Path(path_dir) / cmd_path
+            if exe_file.exists():
+                if sys.platform != 'win32':
+                    is_executable = os.access(exe_file, os.X_OK)
+                    if not is_executable:
+                        print(f"文件存在于PATH中但不可执行: {exe_file}")
+                    return is_executable
+                return True
+        
+        return False
+    except Exception as e:
+        print(f"检查可执行文件时出错: {str(e)}")
+        return False
 
 # 确保文件可执行（Linux 系统）
 def ensure_executable(file_path):
@@ -225,9 +235,19 @@ def ensure_executable(file_path):
     if sys.platform != 'win32':
         path = Path(file_path)
         if path.exists():
-            current_mode = os.stat(path).st_mode
-            # 添加用户可执行权限
-            os.chmod(path, current_mode | stat.S_IXUSR)
+            try:
+                current_mode = os.stat(path).st_mode
+                # 添加用户可执行权限
+                os.chmod(path, current_mode | stat.S_IXUSR)
+                print(f"已成功为文件添加执行权限: {file_path}")
+                return True
+            except Exception as e:
+                print(f"无法为文件添加执行权限: {file_path}, 错误: {str(e)}")
+                return False
+        else:
+            print(f"文件不存在，无法添加执行权限: {file_path}")
+            return False
+    return True
 
 # 封装命令执行逻辑
 def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
@@ -249,15 +269,40 @@ def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
 # 重构run_aichat_command函数
 def run_aichat_command(args, history_param=None):
     """运行aichat命令并捕获输出"""
-    cmd = ["aichat"]
+    # 定义可能的命令路径
+    possible_paths = [
+        "aichat",                  # 全局路径
+        "./aichat",                # 当前目录
+        str(Path(__file__).parent / "aichat"),  # 脚本所在目录
+        str(Path.home() / "bin" / "aichat"),    # 用户bin目录
+        "/usr/local/bin/aichat",   # 常见安装位置
+        "/usr/bin/aichat"          # 另一个常见位置
+    ]
     
-    # 检查 aichat 是否存在且可执行
-    if not check_executable("aichat"):
-        # 如果当前目录有 aichat 文件但不可执行
+    # 查找可用的aichat命令
+    cmd = None
+    for path in possible_paths:
+        if check_executable(path):
+            cmd = [path]
+            print(f"找到aichat命令: {path}")
+            break
+    
+    # 如果在预定义路径中未找到，尝试在当前目录查找任何aichat文件并使其可执行
+    if cmd is None and sys.platform != 'win32':
         local_aichat = Path("./aichat")
-        if local_aichat.exists() and sys.platform != 'win32':
-            ensure_executable(local_aichat)
-            cmd = ["./aichat"]
+        if local_aichat.exists():
+            try:
+                ensure_executable(local_aichat)
+                cmd = ["./aichat"]
+                print(f"已使当前目录中的aichat可执行: {local_aichat}")
+            except Exception as e:
+                print(f"无法使aichat可执行: {str(e)}")
+    
+    # 如果仍未找到可执行的aichat，提供详细错误并退出
+    if cmd is None:
+        error_msg = "错误: 未找到可执行的aichat命令。请确保已安装aichat并添加到PATH中，或将aichat可执行文件放在当前目录。"
+        print(error_msg)
+        return error_msg, None
     
     # 检查是否是代码执行模式
     is_code_mode = '-e' in args
@@ -372,16 +417,21 @@ def run_aichat_command(args, history_param=None):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,  # 合并错误流到输出流
                     text=False,  # 使用二进制模式，手动处理编码
-                    bufsize=0    # 无缓冲，立即输出每个字符
+                    bufsize=0,   # 无缓冲，立即输出每个字符
+                    shell=True   # 使用shell执行以解决访问问题
                 )
+                
+                # 检查进程是否成功创建
+                if process.stdout is None:
+                    raise Exception("无法访问进程输出流")
                 
                 # 逐字符读取并实时打印
                 while True:
-                    char = process.stdout.read(1)  # 一次读取一个字节
-                    if not char:  # 结束标志
-                        break
-                    
                     try:
+                        char = process.stdout.read(1)  # 一次读取一个字节
+                        if not char:  # 结束标志
+                            break
+                        
                         # 尝试解码字符
                         decoded_char = char.decode('utf-8')
                         sys.stdout.write(decoded_char)  # 直接写入标准输出
@@ -410,6 +460,10 @@ def run_aichat_command(args, history_param=None):
                                         pass
                                     break
                                 buffer += next_char
+                    except Exception as e:
+                        # 捕获其他读取错误
+                        print(f"读取错误: {str(e)}")
+                        break
                 
                 process.wait()
                 final_output = ''.join(output)
@@ -424,16 +478,21 @@ def run_aichat_command(args, history_param=None):
                         stderr=subprocess.STDOUT,
                         text=False,
                         bufsize=0,
-                        creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0  # 避免闪现命令行窗口
+                        shell=True,  # 使用shell执行以解决访问问题
+                        creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                     )
                     
+                    # 检查进程是否成功创建
+                    if process.stdout is None:
+                        raise Exception("无法访问进程输出流")
+                        
                     # 逐字符读取并实时打印
                     while True:
-                        char = process.stdout.read(1)  # 一次读取一个字节
-                        if not char:  # 结束标志
-                            break
-                        
                         try:
+                            char = process.stdout.read(1)  # 一次读取一个字节
+                            if not char:  # 结束标志
+                                break
+                            
                             # 尝试用UTF-8解码
                             decoded_char = char.decode('utf-8')
                             sys.stdout.write(decoded_char)
@@ -463,6 +522,10 @@ def run_aichat_command(args, history_param=None):
                                             pass
                                         break
                                     buffer += next_char
+                        except Exception as e:
+                            # 捕获其他读取错误
+                            print(f"读取错误: {str(e)}")
+                            break
                     
                     process.wait()
                     final_output = ''.join(output)
