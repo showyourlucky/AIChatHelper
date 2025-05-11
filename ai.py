@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+import stat
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,14 @@ conn = None
 # 数据库路径（修改：使用sys.executable定位exe所在目录）
 DB_PATH = Path(sys.executable).parent / "ai_chat_history.db" if getattr(sys, 'frozen', False) else Path(__file__).parent / "ai_chat_history.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+# 获取系统默认 shell
+def get_system_shell():
+    """获取系统默认 shell"""
+    if sys.platform == 'win32':
+        return os.environ.get('COMSPEC', 'C:\\Windows\\System32\\cmd.exe')
+    else:
+        return os.environ.get('SHELL', '/bin/bash')
 
 # 移除原有的数据库连接装饰器
 
@@ -181,6 +190,38 @@ def has_active_session(cursor):
     
     return count > 0
 
+# 检查文件是否存在并是否可执行
+def check_executable(cmd_path):
+    """检查文件是否存在并是否可执行"""
+    cmd_file = Path(cmd_path)
+    
+    # 如果是绝对路径且文件存在
+    if cmd_file.exists():
+        # 在 Linux/Mac 上检查可执行权限
+        if sys.platform != 'win32':
+            return os.access(cmd_file, os.X_OK)
+        return True
+    
+    # 搜索 PATH 环境变量
+    for path_dir in os.environ.get('PATH', '').split(os.pathsep):
+        exe_file = Path(path_dir) / cmd_path
+        if exe_file.exists():
+            if sys.platform != 'win32':
+                return os.access(exe_file, os.X_OK)
+            return True
+    
+    return False
+
+# 确保文件可执行（Linux 系统）
+def ensure_executable(file_path):
+    """确保文件在 Linux 系统下具有可执行权限"""
+    if sys.platform != 'win32':
+        path = Path(file_path)
+        if path.exists():
+            current_mode = os.stat(path).st_mode
+            # 添加用户可执行权限
+            os.chmod(path, current_mode | stat.S_IXUSR)
+
 # 封装命令执行逻辑
 def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
     try:
@@ -202,6 +243,14 @@ def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
 def run_aichat_command(args, history_param=None):
     """运行aichat命令并捕获输出"""
     cmd = ["aichat"]
+    
+    # 检查 aichat 是否存在且可执行
+    if not check_executable("aichat"):
+        # 如果当前目录有 aichat 文件但不可执行
+        local_aichat = Path("./aichat")
+        if local_aichat.exists() and sys.platform != 'win32':
+            ensure_executable(local_aichat)
+            cmd = ["./aichat"]
     
     # 检查是否是代码执行模式
     is_code_mode = '-e' in args
