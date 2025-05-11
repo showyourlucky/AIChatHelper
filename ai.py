@@ -9,6 +9,13 @@ import stat
 from datetime import datetime
 from pathlib import Path
 
+# Windows平台特定导入
+if sys.platform == 'win32':
+    # 导入Windows特定的subprocess标志
+    from subprocess import CREATE_NO_WINDOW
+else:
+    # 为非Windows平台定义一个假的CREATE_NO_WINDOW常量
+    CREATE_NO_WINDOW = 0
 
 # 全局数据库连接对象
 conn = None
@@ -267,27 +274,80 @@ def run_aichat_command(args, history_param=None):
         
         # 代码执行模式需要先获取命令建议，再交互执行
         if is_code_mode:
-            # 1. 先以捕获输出模式运行，获取命令建议
-            preview_cmd = cmd.copy()
-            output_preview, _ = run_command(preview_cmd, capture_output=True)
-            
-            # 提取建议的命令
-            suggested_command = ""
-            if output_preview:
-                lines = output_preview.strip().split('\n')
-                if lines:
-                    suggested_command = lines[0]  # 第一行通常是命令建议
-            
-            # 2. 再以交互模式运行命令，允许用户选择
-            run_command(cmd, capture_output=False)
-            
-            # 3. 如果用户选择执行(e)，尝试捕获命令执行结果
-            actual_output = ""
-            if suggested_command:
+            # Linux系统下的特殊处理
+            if sys.platform != 'win32':
+                # 1. 先以非交互模式运行，获取命令建议
+                preview_cmd = cmd.copy()
+                # 将命令的标准输出和标准错误重定向到管道
+                process = subprocess.Popen(
+                    preview_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8'
+                )
+                
+                # 读取输出和错误信息
+                stdout, stderr = process.communicate()
+                output_preview = stdout if stdout else ""
+                
+                # 提取建议的命令
+                suggested_command = ""
+                if output_preview:
+                    lines = output_preview.strip().split('\n')
+                    if lines:
+                        suggested_command = lines[0]  # 第一行通常是命令建议
+                
+                # 2. 再以交互模式运行命令，允许用户选择
+                # 对于Linux，使用终端直接执行以保持交互性
                 try:
-                    # 执行实际命令并捕获输出
-                    if sys.platform == 'win32':
-                        # 在Windows系统中，使用PowerShell并设置输出编码
+                    interactive_process = subprocess.Popen(cmd)
+                    interactive_process.wait()
+                except Exception as e:
+                    print(f"交互执行失败: {str(e)}")
+                
+                # 3. 如果用户选择执行(e)，尝试捕获命令执行结果
+                actual_output = ""
+                if suggested_command:
+                    try:
+                        # 执行实际命令并捕获输出
+                        actual_cmd = ["bash", "-c", suggested_command]
+                        actual_process = subprocess.Popen(
+                            actual_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            encoding='utf-8'
+                        )
+                        stdout, stderr = actual_process.communicate()
+                        actual_output = stdout if stdout else stderr if stderr else ""
+                    except Exception as e:
+                        actual_output = f"无法捕获命令执行结果: {str(e)}"
+                
+                # 返回提示信息、建议的命令和实际执行结果
+                complete_output = f"命令已执行: {suggested_command}\n\n{actual_output}"
+                return complete_output, suggested_command
+            
+            else:  # Windows系统处理逻辑保持不变
+                # 1. 先以捕获输出模式运行，获取命令建议
+                preview_cmd = cmd.copy()
+                output_preview, _ = run_command(preview_cmd, capture_output=True)
+                
+                # 提取建议的命令
+                suggested_command = ""
+                if output_preview:
+                    lines = output_preview.strip().split('\n')
+                    if lines:
+                        suggested_command = lines[0]  # 第一行通常是命令建议
+                
+                # 2. 再以交互模式运行命令，允许用户选择
+                run_command(cmd, capture_output=False)
+                
+                # 3. 如果用户选择执行(e)，尝试捕获命令执行结果
+                actual_output = ""
+                if suggested_command:
+                    try:
+                        # 执行实际命令并捕获输出
                         actual_cmd = ["powershell", "-Command", "$OutputEncoding = [System.Text.Encoding]::UTF8; " + suggested_command]
                         actual_output, _ = run_command(actual_cmd, capture_output=True, text=False)
                         # 尝试使用UTF-8解码，如果失败则使用GBK解码（Windows中文系统默认）
@@ -295,24 +355,145 @@ def run_aichat_command(args, history_param=None):
                             actual_output = actual_output.decode('utf-8')
                         except UnicodeDecodeError:
                             actual_output = actual_output.decode('gbk', errors='replace')
-                    else:
-                        # 非Windows系统
-                        actual_cmd = ["bash", "-c", suggested_command]
-                        actual_output, _ = run_command(actual_cmd, capture_output=True)
-                except Exception as e:
-                    actual_output = f"无法捕获命令执行结果: {str(e)}"
-            
-            # 无法捕获交互过程的输出，但可以获取命令的执行状态
-            # 返回提示信息、建议的命令和实际执行结果
-            complete_output = f"命令已执行: {suggested_command}\n\n{actual_output}"
-            return complete_output, suggested_command
+                    except Exception as e:
+                        actual_output = f"无法捕获命令执行结果: {str(e)}"
+                
+                # 返回提示信息、建议的命令和实际执行结果
+                complete_output = f"命令已执行: {suggested_command}\n\n{actual_output}"
+                return complete_output, suggested_command
         else:
-            # 非代码执行模式，捕获输出
-            output, _ = run_command(cmd, capture_output=True)
-            return output.strip(), None
+            # 非代码执行模式，优化为字符级流式输出
+            output = []
+            
+            if sys.platform != 'win32':
+                # Linux/Mac 流式输出处理
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # 合并错误流到输出流
+                    text=False,  # 使用二进制模式，手动处理编码
+                    bufsize=0    # 无缓冲，立即输出每个字符
+                )
+                
+                # 逐字符读取并实时打印
+                while True:
+                    char = process.stdout.read(1)  # 一次读取一个字节
+                    if not char:  # 结束标志
+                        break
+                    
+                    try:
+                        # 尝试解码字符
+                        decoded_char = char.decode('utf-8')
+                        sys.stdout.write(decoded_char)  # 直接写入标准输出
+                        sys.stdout.flush()  # 立即刷新输出
+                        output.append(decoded_char)
+                    except UnicodeDecodeError:
+                        # 可能是多字节字符的一部分，继续读取
+                        buffer = char
+                        while True:
+                            try:
+                                decoded_char = buffer.decode('utf-8')
+                                sys.stdout.write(decoded_char)
+                                sys.stdout.flush()
+                                output.append(decoded_char)
+                                break
+                            except UnicodeDecodeError:
+                                next_char = process.stdout.read(1)
+                                if not next_char:  # 到达流末尾
+                                    # 处理不完整的多字节字符
+                                    try:
+                                        decoded_char = buffer.decode('utf-8', errors='replace')
+                                        sys.stdout.write(decoded_char)
+                                        sys.stdout.flush()
+                                        output.append(decoded_char)
+                                    except:
+                                        pass
+                                    break
+                                buffer += next_char
+                
+                process.wait()
+                final_output = ''.join(output)
+                return final_output.strip(), None
+            else:
+                # Windows 流式输出处理
+                try:
+                    # 创建子进程并设置无缓冲输出
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=False,
+                        bufsize=0,
+                        creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0  # 避免闪现命令行窗口
+                    )
+                    
+                    # 逐字符读取并实时打印
+                    while True:
+                        char = process.stdout.read(1)  # 一次读取一个字节
+                        if not char:  # 结束标志
+                            break
+                        
+                        try:
+                            # 尝试用UTF-8解码
+                            decoded_char = char.decode('utf-8')
+                            sys.stdout.write(decoded_char)
+                            sys.stdout.flush()
+                            output.append(decoded_char)
+                        except UnicodeDecodeError:
+                            # 可能是多字节字符的一部分，继续读取
+                            buffer = char
+                            while True:
+                                try:
+                                    # 尝试解码
+                                    decoded_char = buffer.decode('utf-8')
+                                    sys.stdout.write(decoded_char)
+                                    sys.stdout.flush()
+                                    output.append(decoded_char)
+                                    break
+                                except UnicodeDecodeError:
+                                    next_char = process.stdout.read(1)
+                                    if not next_char:  # 到达流末尾
+                                        # 处理不完整的多字节字符
+                                        try:
+                                            decoded_char = buffer.decode('utf-8', errors='replace')
+                                            sys.stdout.write(decoded_char)
+                                            sys.stdout.flush()
+                                            output.append(decoded_char)
+                                        except:
+                                            pass
+                                        break
+                                    buffer += next_char
+                    
+                    process.wait()
+                    final_output = ''.join(output)
+                    return final_output.strip(), None
+                except Exception as e:
+                    error_msg = f"字符级流式输出失败: {str(e)}"
+                    print(error_msg)
+                    
+                    # 回退到兼容模式
+                    print("切换到行级流式输出...")
+                    # 使用shell=True确保Windows下可以正确处理编码
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        bufsize=1,
+                        universal_newlines=True,
+                        shell=sys.platform == 'win32'  # Windows需要shell处理
+                    )
+                    output = []
+                    for line in process.stdout:
+                        print(line.strip())
+                        output.append(line)
+                    process.wait()
+                    final_output = ''.join(output)
+                    return final_output.strip(), None
     except Exception as e:
         return f"错误: 无法执行aichat命令 - {str(e)}", None
-
+    
 def extract_answer_from_output(output, is_code_mode=False):
     """从输出中提取答案部分"""
     if is_code_mode and "?" in output and "execute | revise | describe | copy | quit" in output:
@@ -378,6 +559,7 @@ def create_param_list(records):
 # 修改main函数
 def main():
     global conn
+    
     # 初始化数据库连接
     cursor = init_db_connection()
     
@@ -421,7 +603,7 @@ def main():
                 
                 # 在非代码执行和自定义角色模式下，添加中文回答提示
                 if not args.e and not args.r:
-                    message = message + "\n answer by Chinese"
+                    message = message + " ;answer by Chinese"
                 
                 cmd_args = []
                 if args.e:
@@ -460,7 +642,7 @@ def main():
             # 在非代码执行和自定义角色模式下，添加中文回答提示
             original_message = message
             if not args.e and not args.r:
-                message = message + "\n answer by Chinese"
+                message = message + "; answer by Chinese"
                 
             # 获取当前活跃会话的所有消息
             records = get_active_session_messages(cursor)
@@ -500,7 +682,7 @@ def main():
             # 在非代码执行和自定义角色模式下，添加中文回答提示
             original_message = message
             if not args.e and not args.r:
-                message = message + "\n answer by Chinese"
+                message = message + "; answer by Chinese"
             
             # 解析范围并获取对应的记录
             ids = []
@@ -556,7 +738,7 @@ def main():
     # 在非代码执行和自定义角色模式下，添加中文回答提示
     original_message = message
     if not args.e and not args.r:
-        message = message + "\n answer by Chinese"
+        message = message + "; answer by Chinese"
     
     cmd_args = []
     if args.e:
