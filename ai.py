@@ -6,6 +6,7 @@ import subprocess
 import sys
 import uuid
 import stat
+import shutil  # 添加shutil导入
 from datetime import datetime
 from pathlib import Path
 
@@ -201,6 +202,13 @@ def has_active_session(cursor):
 def check_executable(cmd_path):
     """检查文件是否存在并是否可执行"""
     try:
+        # 首先使用shutil.which检查命令是否在PATH中
+        which_result = shutil.which(cmd_path)
+        if which_result:
+            print(f"在PATH中找到命令: {which_result}")
+            return True
+            
+        # 如果which没找到，继续检查是否是绝对路径或相对路径
         cmd_file = Path(cmd_path)
         
         # 如果是绝对路径且文件存在
@@ -279,13 +287,19 @@ def run_aichat_command(args, history_param=None):
         "/usr/bin/aichat"          # 另一个常见位置
     ]
     
-    # 查找可用的aichat命令
-    cmd = None
-    for path in possible_paths:
-        if check_executable(path):
-            cmd = [path]
-            print(f"找到aichat命令: {path}")
-            break
+    # 首先直接检查aichat是否在PATH中
+    aichat_in_path = shutil.which("aichat")
+    if aichat_in_path:
+        cmd = [aichat_in_path]
+        print(f"找到aichat命令: {aichat_in_path}")
+    else:
+        # 如果在PATH中没找到，查找可用的aichat命令
+        cmd = None
+        for path in possible_paths:
+            if check_executable(path):
+                cmd = [path]
+                print(f"找到aichat命令: {path}")
+                break
     
     # 如果在预定义路径中未找到，尝试在当前目录查找任何aichat文件并使其可执行
     if cmd is None and sys.platform != 'win32':
@@ -298,7 +312,23 @@ def run_aichat_command(args, history_param=None):
             except Exception as e:
                 print(f"无法使aichat可执行: {str(e)}")
     
-    # 如果仍未找到可执行的aichat，提供详细错误并退出
+    # 如果仍未找到可执行的aichat，尝试直接执行命令测试
+    if cmd is None:
+        try:
+            # 尝试直接执行aichat -V命令测试是否可用
+            test_process = subprocess.run(
+                ["aichat", "-V"], 
+                capture_output=True, 
+                text=True,
+                check=False
+            )
+            if test_process.returncode == 0:
+                print(f"通过直接执行测试找到aichat命令")
+                cmd = ["aichat"]
+        except Exception as e:
+            print(f"测试aichat命令失败: {str(e)}")
+    
+    # 如果最终仍未找到可执行的aichat，提供详细错误并退出
     if cmd is None:
         error_msg = "错误: 未找到可执行的aichat命令。请确保已安装aichat并添加到PATH中，或将aichat可执行文件放在当前目录。"
         print(error_msg)
