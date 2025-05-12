@@ -249,15 +249,19 @@ def ensure_executable(file_path):
             return False
     return True
 
-# 封装命令执行逻辑
+# 修改run_command函数确保环境变量传递
 def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
     try:
+        # 获取当前环境变量
+        env = os.environ.copy()
+        
         result = subprocess.run(
             cmd,
             capture_output=capture_output,
             text=text,
             encoding=encoding,
-            check=True
+            check=True,
+            env=env  # 显式传递环境变量
         )
         return result.stdout if capture_output else "", None
     except subprocess.CalledProcessError as e:
@@ -284,7 +288,6 @@ def run_aichat_command(args, history_param=None):
     for path in possible_paths:
         if check_executable(path):
             cmd = [path]
-            print(f"找到aichat命令: {path}")
             break
     
     # 如果在预定义路径中未找到，尝试在当前目录查找任何aichat文件并使其可执行
@@ -418,7 +421,8 @@ def run_aichat_command(args, history_param=None):
                     stderr=subprocess.STDOUT,  # 合并错误流到输出流
                     text=False,  # 使用二进制模式，手动处理编码
                     bufsize=0,   # 无缓冲，立即输出每个字符
-                    shell=True   # 使用shell执行以解决访问问题
+                    shell=True,  # 使用shell执行以解决访问问题
+                    env=os.environ.copy()  # 显式传递环境变量
                 )
                 
                 # 检查进程是否成功创建
@@ -479,7 +483,8 @@ def run_aichat_command(args, history_param=None):
                         text=False,
                         bufsize=0,
                         shell=True,  # 使用shell执行以解决访问问题
-                        creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                        creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+                        env=os.environ.copy()  # 显式传递环境变量
                     )
                     
                     # 检查进程是否成功创建
@@ -545,7 +550,8 @@ def run_aichat_command(args, history_param=None):
                         encoding='utf-8',
                         bufsize=1,
                         universal_newlines=True,
-                        shell=sys.platform == 'win32'  # Windows需要shell处理
+                        shell=sys.platform == 'win32',  # Windows需要shell处理
+                        env=os.environ.copy()  # 显式传递环境变量
                     )
                     output = []
                     for line in process.stdout:
