@@ -273,39 +273,7 @@ def run_command(cmd, capture_output=False, text=True, encoding='utf-8'):
 # 重构run_aichat_command函数
 def run_aichat_command(args, history_param=None):
     """运行aichat命令并捕获输出"""
-    # 定义可能的命令路径
-    possible_paths = [
-        "aichat",                  # 全局路径
-        "./aichat",                # 当前目录
-        str(Path(__file__).parent / "aichat"),  # 脚本所在目录
-        str(Path.home() / "bin" / "aichat"),    # 用户bin目录
-        "/usr/local/bin/aichat",   # 常见安装位置
-        "/usr/bin/aichat"          # 另一个常见位置
-    ]
-    
-    # 查找可用的aichat命令
-    cmd = None
-    for path in possible_paths:
-        if check_executable(path):
-            cmd = [path]
-            break
-    
-    # 如果在预定义路径中未找到，尝试在当前目录查找任何aichat文件并使其可执行
-    if cmd is None and sys.platform != 'win32':
-        local_aichat = Path("./aichat")
-        if local_aichat.exists():
-            try:
-                ensure_executable(local_aichat)
-                cmd = ["./aichat"]
-                print(f"已使当前目录中的aichat可执行: {local_aichat}")
-            except Exception as e:
-                print(f"无法使aichat可执行: {str(e)}")
-    
-    # 如果仍未找到可执行的aichat，提供详细错误并退出
-    if cmd is None:
-        error_msg = "错误: 未找到可执行的aichat命令。请确保已安装aichat并添加到PATH中，或将aichat可执行文件放在当前目录。"
-        print(error_msg)
-        return error_msg, None
+    cmd = ["aichat"]
     
     # 检查是否是代码执行模式
     is_code_mode = '-e' in args
